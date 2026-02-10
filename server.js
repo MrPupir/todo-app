@@ -126,6 +126,7 @@ const BoardSchema = new mongoose.Schema({
 const ColumnSchema = new mongoose.Schema({
     boardId: { type: mongoose.Schema.Types.ObjectId, ref: 'Board', required: true },
     title: { type: String, required: true },
+    order: { type: Number, default: 0 },
     created: { type: Date, default: Date.now }
 });
 
@@ -463,7 +464,7 @@ app.get('/api/data', authenticate, async (req, res) => {
     const role = await getBoardAccess(boardId, req.user.username);
     if (!role) return res.status(403).json({ error: 'Access Denied' });
 
-    const columns = await Column.find({ boardId }).sort({ created: 1 });
+    const columns = await Column.find({ boardId }).sort({ order: 1 });
     const tasks = await Task.find({ boardId }).sort({ order: 1 });
     const history = await History.find({ boardId }).sort({ date: -1 }).limit(50);
     const board = await Board.findById(boardId);
@@ -490,7 +491,8 @@ app.post('/api/columns/create', authenticate, async (req, res) => {
     const role = await getBoardAccess(boardId, req.user.username);
     if (role !== 'edit' && role !== 'owner') return res.status(403).json({ error: 'Forbidden' });
 
-    await Column.create({ title, boardId });
+    const count = await Column.countDocuments({ boardId });
+    await Column.create({ title, boardId, order: count });
     await logAction(boardId, req.user.username, `Added column "${title}"`);
     broadcastToBoard(boardId, { type: 'UPDATE' });
     res.json({ success: true });
@@ -509,6 +511,29 @@ app.delete('/api/columns/delete', authenticate, async (req, res) => {
         await Task.deleteMany({ columnId });
         await Column.findByIdAndDelete(columnId);
         await logAction(boardId, req.user.username, `Deleted column "${col.title}"`);
+        broadcastToBoard(boardId, { type: 'UPDATE' });
+    }
+    res.json({ success: true });
+});
+
+app.put('/api/columns/reorder', authenticate, async (req, res) => {
+    const { columnId, newIndex, boardId } = req.body;
+    const role = await getBoardAccess(boardId, req.user.username);
+    if (role !== 'edit' && role !== 'owner') return res.status(403).json({ error: 'Forbidden' });
+
+    const col = await Column.findById(columnId);
+    if (!col) return res.status(404).json({ error: 'Column not found' });
+    
+    const oldIndex = col.order;
+
+    if (oldIndex !== newIndex) {
+        if (newIndex > oldIndex) {
+            await Column.updateMany({ boardId, order: { $gt: oldIndex, $lte: newIndex } }, { $inc: { order: -1 } });
+        } else {
+            await Column.updateMany({ boardId, order: { $gte: newIndex, $lt: oldIndex } }, { $inc: { order: 1 } });
+        }
+        col.order = newIndex;
+        await col.save();
         broadcastToBoard(boardId, { type: 'UPDATE' });
     }
     res.json({ success: true });
