@@ -49,27 +49,115 @@ function connectWs() {
     };
     ws.onmessage = (e) => {
         const msg = JSON.parse(e.data);
+
         if (msg.type === 'UPDATE') {
             if (msg.deletedTaskId && currentOpenTaskId === msg.deletedTaskId) closeModal('edit-modal');
             if (currentBoardId) loadBoardData(currentBoardId);
         }
-        if (msg.type === 'PRESENCE') updateActiveUsers(msg.users);
-        if (msg.type === 'BOARD_ADDED') loadBoards();
-        if (msg.type === 'MEMBER_UPDATED') {
-            if (currentBoardId) loadBoardData(currentBoardId);
+
+        if (msg.type === 'PRESENCE') {
+            updateActiveUsers(msg.users);
         }
-        if (msg.type === 'KICKED') {
+
+        if (msg.type === 'BOARD_ADDED') {
+            loadBoards();
+        }
+
+        if (msg.type === 'BOARD_RENAMED') {
             if (currentBoardId === msg.boardId) {
-                showToast('You have been removed from this board', 'error');
-                navigateToDashboard();
-            } else loadBoards();
+                boardData.board.title = msg.title;
+                document.getElementById('board-title').innerText = msg.title;
+            } else {
+                loadBoards();
+            }
         }
+
+        if (msg.type === 'BOARDS_UPDATED') {
+            loadBoards();
+        }
+
         if (msg.type === 'BOARD_DELETED') {
             if (currentBoardId === msg.boardId) {
                 showToast('Board deleted', 'error');
                 navigateToDashboard();
-            } else loadBoards();
+            } else {
+                loadBoards();
+            }
         }
+
+        if (msg.type === 'MEMBER_ADDED') {
+            if (currentBoardId) {
+                boardData.members.push(msg.member);
+                boardData.users[msg.userData.username] = msg.userData;
+                if (document.getElementById('members-modal').classList.contains('open')) {
+                    renderMembersList();
+                }
+                showToast(`User ${msg.userData.displayName} joined`);
+            }
+        }
+
+        if (msg.type === 'MEMBER_ROLE_UPDATED') {
+            if (currentBoardId) {
+                const mem = boardData.members.find(m => m.user === msg.username);
+                if (mem) {
+                    mem.role = msg.role;
+                    if (msg.username === currentUser.username) {
+                        boardData.myRole = msg.role;
+                        loadBoardData(currentBoardId);
+                    } else {
+                        if (document.getElementById('members-modal').classList.contains('open')) {
+                            renderMembersList();
+                        }
+                    }
+                }
+            }
+        }
+
+        if (msg.type === 'MEMBER_REMOVED') {
+            if (currentBoardId) {
+                boardData.members = boardData.members.filter(m => m.user !== msg.username);
+                if (document.getElementById('members-modal').classList.contains('open')) {
+                    renderMembersList();
+                }
+            }
+        }
+
+        if (msg.type === 'KICKED') {
+            if (currentBoardId === msg.boardId) {
+                showToast('You have been removed from this board', 'error');
+                navigateToDashboard();
+            } else {
+                loadBoards();
+            }
+        }
+
+        if (msg.type === 'USER_UPDATED') {
+            if (boardData && boardData.users && boardData.users[msg.username]) {
+                boardData.users[msg.username].avatar = msg.avatar;
+                boardData.users[msg.username].displayName = msg.displayName;
+
+                if (currentBoardId) {
+                    if (document.getElementById('members-modal').classList.contains('open')) {
+                        renderMembersList();
+                    }
+
+                    if (currentOpenTaskId) {
+                        const task = boardData.tasks.find(t => t._id === currentOpenTaskId);
+                        if (task) renderComments(task.comments);
+                    }
+
+                    renderHistory();
+                    renderBoard();
+                }
+            }
+
+            if (currentUser && currentUser.username === msg.username) {
+                currentUser.avatar = msg.avatar;
+                currentUser.displayName = msg.displayName;
+                updateUserHeader();
+            }
+        }
+
         if (msg.type === 'AUTH_OK') {
             console.log('WS authenticated');
         }
@@ -171,7 +259,7 @@ function setSession(res) {
 async function checkSession() {
     if (isCheckingSession) return;
     isCheckingSession = true;
-    
+
     authToken = localStorage.getItem('authToken');
     if (!authToken) {
         isCheckingSession = false;
@@ -353,11 +441,29 @@ async function loadBoardView(id) {
     document.getElementById('view-board').classList.add('active');
 }
 
+function promptRenameBoard() {
+    promptSimple('Rename Board', 'New Title', async (title) => {
+        const res = await api('/api/boards/rename', 'PUT', { boardId: currentBoardId, title });
+        if (!res.success) showToast(res.error, 'error');
+    });
+}
+
 async function loadBoardData(id) {
     const data = await api(`/api/boards/data?boardId=${id}`);
     if (data.error) return data;
     boardData = data;
-    document.getElementById('board-title').innerText = boardData.board.title;
+    
+    const titleEl = document.getElementById('board-title');
+    titleEl.innerText = boardData.board.title;
+
+    if (boardData.myRole === 'owner' || boardData.myRole === 'edit') {
+        titleEl.style.cursor = 'pointer';
+        titleEl.title = "Click to rename";
+        titleEl.onclick = promptRenameBoard;
+    } else {
+        titleEl.style.cursor = 'default';
+        titleEl.onclick = null;
+    }
 
     const canEdit = boardData.myRole === 'edit' || boardData.myRole === 'owner';
     const boardActions = document.getElementById('board-actions');
@@ -437,7 +543,7 @@ function renderBoard() {
             handle: '.column-header',
             filter: '.btn-icon',
             preventOnFilter: false,
-            onEnd: function(evt) {
+            onEnd: function (evt) {
                 const columnId = evt.item.getAttribute('data-id');
                 const newIndex = evt.newIndex;
                 api('/api/columns/reorder', 'PUT', {
@@ -452,10 +558,10 @@ function renderBoard() {
             const sortable = new Sortable(list, {
                 group: 'tasks',
                 animation: 150,
-                onStart: function() {
+                onStart: function () {
                     document.body.classList.add('is-dragging');
                 },
-                onEnd: async function(evt) {
+                onEnd: async function (evt) {
                     const taskId = evt.item.getAttribute('data-id');
                     const targetColumnId = evt.to.getAttribute('data-col-id');
                     const newIndex = evt.newIndex;
@@ -706,40 +812,44 @@ async function addComment() {
     } else showToast(res.error, 'error');
 }
 
-function openMembersModal() {
+function renderMembersList() {
     const list = document.getElementById('members-list');
-    const isOwner = boardData.myRole === 'owner';
-    document.getElementById('invite-section').style.display = isOwner ? 'flex' : 'none';
+    if (!list) return;
 
-    const render = () => {
-        let html = '';
-        boardData.members.forEach(m => {
-            const uObj = boardData.users[m.user] || { displayName: m.user };
-            html += `
-                <div class="member-list-item">
-                    <div class="member-info">
-                        ${renderUserAvatar(uObj)}
-                        <div>
-                            <span style="font-weight:600; color:${m.user === boardData.board.owner ? 'var(--primary)' : 'var(--text-main)'}">${escape(uObj.displayName)}</span>
-                            <div style="font-size:0.75rem; color:var(--text-muted);">@${m.user} ${m.user === boardData.board.owner ? '(Owner)' : ''}</div>
-                        </div>
-                    </div>
-                    <div style="display:flex; align-items:center; gap:8px;">
-                        ${isOwner && m.user !== boardData.board.owner ? `
-                            <select style="width:auto; padding:4px;" onchange="changeRole('${m.user}', this.value)">
-                                <option value="view" ${m.role === 'view' ? 'selected' : ''}>View</option>
-                                <option value="comment" ${m.role === 'comment' ? 'selected' : ''}>Comment</option>
-                                <option value="edit" ${m.role === 'edit' ? 'selected' : ''}>Edit</option>
-                            </select>
-                            <button class="btn btn-danger" style="padding:4px 8px; font-size:0.75rem;" onclick="kickMember('${m.user}')">Remove</button>
-                        ` : `<span style="font-size:0.8rem; color:var(--text-muted);">${m.role}</span>`}
+    const isOwner = boardData.myRole === 'owner';
+    const inviteSection = document.getElementById('invite-section');
+    if (inviteSection) inviteSection.style.display = isOwner ? 'flex' : 'none';
+
+    let html = '';
+    boardData.members.forEach(m => {
+        const uObj = boardData.users[m.user] || { displayName: m.user, username: m.user };
+        html += `
+            <div class="member-list-item">
+                <div class="member-info">
+                    ${renderUserAvatar(uObj)}
+                    <div>
+                        <span style="font-weight:600; color:${m.user === boardData.board.owner ? 'var(--primary)' : 'var(--text-main)'}">${escape(uObj.displayName)}</span>
+                        <div style="font-size:0.75rem; color:var(--text-muted);">@${m.user} ${m.user === boardData.board.owner ? '(Owner)' : ''}</div>
                     </div>
                 </div>
-            `;
-        });
-        list.innerHTML = html;
-    }
-    render();
+                <div style="display:flex; align-items:center; gap:8px;">
+                    ${isOwner && m.user !== boardData.board.owner ? `
+                        <select style="width:auto; padding:4px;" onchange="changeRole('${m.user}', this.value)">
+                            <option value="view" ${m.role === 'view' ? 'selected' : ''}>View</option>
+                            <option value="comment" ${m.role === 'comment' ? 'selected' : ''}>Comment</option>
+                            <option value="edit" ${m.role === 'edit' ? 'selected' : ''}>Edit</option>
+                        </select>
+                        <button class="btn btn-danger" style="padding:4px 8px; font-size:0.75rem;" onclick="kickMember('${m.user}')">Remove</button>
+                    ` : `<span style="font-size:0.8rem; color:var(--text-muted);">${m.role}</span>`}
+                </div>
+            </div>
+        `;
+    });
+    list.innerHTML = html;
+}
+
+function openMembersModal() {
+    renderMembersList();
     openModal('members-modal');
 }
 
@@ -779,7 +889,6 @@ function promptSimple(title, placeholder, cb) {
 
 function promptCreateBoard() {
     promptSimple('Create Board', 'Board Title', async (title) => {
-        console.log("trying to send api");
         const res = await api('/api/boards/create', 'POST', { title });
         if (res.success) loadBoards();
     });

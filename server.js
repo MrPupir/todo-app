@@ -26,13 +26,18 @@ const app = express();
 const server = http.createServer(app);
 const wsManager = new WebSocketManager(server);
 
+const injectWs = (req, res, next) => {
+    req.wsManager = wsManager;
+    next();
+}
+
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors());
 app.use(express.json({ limit: '50kb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.use('/api/auth', authRoutes);
-app.use('/api/users', userRoutes);
+app.use('/api/users', injectWs, userRoutes);
 app.use('/api/boards', boardRoutes(wsManager));
 app.use('/api/columns', columnRoutes(wsManager));
 app.use('/api/tasks', taskRoutes(wsManager));

@@ -17,7 +17,38 @@ exports.createBoard = async (req, res) => {
     if (!title) throw new AppError('Title is required', 400);
 
     const board = await Board.create({ title, owner: req.user.username });
+    
+    req.wsManager.broadcastAll({ type: 'BOARDS_UPDATED' });
+    
     res.json({ success: true, boardId: board._id });
+};
+
+exports.renameBoard = async (req, res) => {
+    const { boardId, title } = req.body;
+    if (!title) throw new AppError('Title is required', 400);
+
+    const board = await Board.findById(boardId);
+    if (!board) throw new AppError('Board not found', 404);
+    
+    if (board.owner !== req.user.username) {
+        const member = board.members.find(m => m.user === req.user.username);
+        if (!member || member.role !== 'edit') throw new AppError('Forbidden', 403);
+    }
+
+    board.title = title;
+    await board.save();
+
+    await logAction(boardId, req.user.username, `Renamed board to "${title}"`);
+    
+    req.wsManager.broadcastToBoard(boardId, { 
+        type: 'BOARD_RENAMED', 
+        boardId, 
+        title 
+    });
+
+    req.wsManager.broadcastAll({ type: 'BOARDS_UPDATED' });
+
+    res.json({ success: true });
 };
 
 exports.deleteBoard = async (req, res) => {
@@ -37,7 +68,10 @@ exports.deleteBoard = async (req, res) => {
         Board.findByIdAndDelete(boardId)
     ]);
 
-    req.wsManager.broadcastToBoard(boardId, { type: 'BOARD_DELETED' });
+    req.wsManager.broadcastToBoard(boardId, { type: 'BOARD_DELETED', boardId });
+
+    req.wsManager.broadcastAll({ type: 'BOARDS_UPDATED' });
+
     res.json({ success: true });
 };
 
@@ -46,7 +80,7 @@ exports.inviteUser = async (req, res) => {
     const board = await Board.findById(boardId);
     if (!board || board.owner !== req.user.username) throw new AppError('Access denied', 403);
 
-    const invitee = await User.exists({ username });
+    const invitee = await User.findOne({ username }).select('username displayName avatar');
     if (!invitee) throw new AppError('User not found', 404);
     if (board.owner === username || board.members.some(m => m.user === username)) throw new AppError('User already in board', 400);
 
@@ -54,7 +88,15 @@ exports.inviteUser = async (req, res) => {
     await board.save();
 
     await logAction(boardId, req.user.username, `Invited ${username}`);
-    req.wsManager.broadcastToBoard(boardId, { type: 'MEMBER_UPDATED' });
+    
+    req.wsManager.broadcastToBoard(boardId, { 
+        type: 'MEMBER_ADDED', 
+        member: { user: username, role: 'comment' },
+        userData: { username: invitee.username, displayName: invitee.displayName, avatar: invitee.avatar }
+    });
+    
+    req.wsManager.broadcastAll({ type: 'BOARDS_UPDATED' });
+    
     res.json({ success: true });
 };
 
@@ -70,7 +112,11 @@ exports.changeRole = async (req, res) => {
     await board.save();
 
     await logAction(boardId, req.user.username, `Changed ${username} role to ${role}`);
-    req.wsManager.broadcastToBoard(boardId, { type: 'MEMBER_UPDATED' });
+    req.wsManager.broadcastToBoard(boardId, { 
+        type: 'MEMBER_ROLE_UPDATED', 
+        username, 
+        role 
+    });
     res.json({ success: true });
 };
 
@@ -84,7 +130,13 @@ exports.removeMember = async (req, res) => {
 
     await logAction(boardId, req.user.username, `Removed ${username}`);
     req.wsManager.sendToUser(username, { type: 'KICKED', boardId });
-    req.wsManager.broadcastToBoard(boardId, { type: 'MEMBER_UPDATED' });
+    req.wsManager.broadcastToBoard(boardId, { 
+        type: 'MEMBER_REMOVED', 
+        username 
+    });
+    
+    req.wsManager.broadcastAll({ type: 'BOARDS_UPDATED' });
+    
     res.json({ success: true });
 };
 

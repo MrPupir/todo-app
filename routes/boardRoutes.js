@@ -10,13 +10,17 @@ const injectWsManager = (wsManager) => (req, res, next) => {
 
 const createRoutes = (wsManager) => {
     const router = express.Router();
+    
     router.get('/', authenticate, catchAsync(boardController.getBoards));
-    router.post('/create', authenticate, catchAsync(boardController.createBoard));
-    router.delete('/delete', authenticate, catchAsync(boardController.deleteBoard));
+    router.post('/create', authenticate, injectWsManager(wsManager), catchAsync(boardController.createBoard));
+    router.delete('/delete', authenticate, injectWsManager(wsManager), catchAsync(boardController.deleteBoard));
+    router.put('/rename', authenticate, injectWsManager(wsManager), catchAsync(boardController.renameBoard));
     router.post('/invite', authenticate, injectWsManager(wsManager), catchAsync(boardController.inviteUser));
     router.put('/role', authenticate, injectWsManager(wsManager), catchAsync(boardController.changeRole));
     router.delete('/member', authenticate, injectWsManager(wsManager), catchAsync(boardController.removeMember));
+    
     router.get('/data', authenticate, catchAsync(boardController.getBoardData));
+    
     return router;
 };
 

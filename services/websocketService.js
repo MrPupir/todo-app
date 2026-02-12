@@ -77,10 +77,28 @@ class WebSocketManager {
         });
     }
 
+    broadcastAll(data) {
+        this.wss.clients.forEach(c => {
+            if (c.readyState === ws.OPEN) {
+                c.send(JSON.stringify(data));
+            }
+        });
+    }
+
     sendToUser(username, data) {
         this.wss.clients.forEach(c => {
             if (c.readyState === ws.OPEN && c.username === username) {
                 c.send(JSON.stringify(data));
+            }
+        });
+    }
+
+    updateUserSocket(username, updateData) {
+        this.wss.clients.forEach(c => {
+            if (c.username === username) {
+                if (updateData.displayName) c.displayName = updateData.displayName;
+                if (updateData.avatar !== undefined) c.avatar = updateData.avatar;
+                if (c.boardId) this.broadcastPresence(c.boardId);
             }
         });
     }
